@@ -1,0 +1,6 @@
+# Python: 3.12.10
+numpy
+matplotlib
+opencv-contrib-python
+pillow
+pandas
