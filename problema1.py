@@ -10,7 +10,8 @@ def main():
     except NameError:
         BASE_DIR = Path.cwd()
 
-    IMAGE_PATH = BASE_DIR / "imagenes" / "monedas.jpg"
+    videos_path = BASE_DIR / "videos"
+    tiradas = sorted(p for p in videos_path.glob("tirada_*.mp4"))
 
 
 if __name__ == "__main__":
