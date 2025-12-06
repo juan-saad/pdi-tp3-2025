@@ -86,4 +86,34 @@ y_fin = int(height * y_fin_pct / 100)
 # Cortar: ancho completo, solo la altura especificada
 frame_cortado = frame_70[y_inicio:y_fin, :]
 
-B, G, R = cv2.split(frame_cortado)
+img_hsv = cv2.cvtColor(frame_cortado, cv2.COLOR_BGR2HSV)
+
+# Separar los canales H, S, V
+H, S, V = cv2.split(img_hsv)
+
+# Mostrar sólo tonos H en el rango 30-90 (OpenCV H: 0-180)
+h_min, h_max = 30, 90
+mask = cv2.inRange(H, h_min, h_max)             # 255 donde H ∈ [30,90], 0 elsewhere
+masked_bgr = cv2.bitwise_and(frame_cortado, frame_cortado, mask=~mask)
+
+# Graficar canal H, máscara y resultado filtrado
+fig2, ax2 = plt.subplots(1, 3, figsize=(15, 5))
+ax2[0].imshow(H, cmap='hsv')
+ax2[0].set_title('Canal H')
+ax2[0].axis('off')
+
+ax2[1].imshow(mask, cmap='gray')
+ax2[1].set_title(f'Máscara H {h_min}-{h_max}')
+ax2[1].axis('off')
+
+ax2[2].imshow(cv2.cvtColor(masked_bgr, cv2.COLOR_BGR2RGB))
+ax2[2].set_title('Imagen filtrada por H')
+ax2[2].axis('off')
+
+plt.tight_layout()
+plt.show(block=False)
+
+# Mostrar rangos de valores
+print(f"Rango H: {H.min()}-{H.max()}")
+print(f"Rango S: {S.min()}-{S.max()}")
+print(f"Rango V: {V.min()}-{V.max()}")
