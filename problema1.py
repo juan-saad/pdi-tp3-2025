@@ -50,7 +50,7 @@ def filter_background_by_hue(image, h_min=30, h_max=90, show_plot=False):
 
 def filter_components_by_area(img, min_area=400, max_area=500):
     num_labels, _, stats, _ = cv2.connectedComponentsWithStats(img, connectivity=8)
-    
+
     frames_with_five_objects = {}
 
     for i in range(1, num_labels):
@@ -63,8 +63,10 @@ def filter_components_by_area(img, min_area=400, max_area=500):
             w = stats[i, cv2.CC_STAT_WIDTH]
             h = stats[i, cv2.CC_STAT_HEIGHT]
             frames_with_five_objects[i] = (x, y, w, h)
-    
-    print(f"Componentes con area entre {min_area} y {max_area}: {len(frames_with_five_objects)}")
+
+    print(
+        f"Componentes con area entre {min_area} y {max_area}: {len(frames_with_five_objects)}"
+    )
     return frames_with_five_objects
 
 
@@ -72,7 +74,7 @@ def show_bounding_boxes(img, stats, color=(0, 255, 0)):
     img_bboxes = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
 
     for i in range(len(stats.keys())):
-        x, y, w, h = stats[i+1]
+        x, y, w, h = stats[i + 1]
         cv2.rectangle(img_bboxes, (x, y), (x + w, y + h), color, 1)
 
     plt.figure(figsize=(10, 8))
@@ -127,36 +129,60 @@ while cap.isOpened():
 
         frame = cv2.resize(frame, dsize=(int(width / 3), int(height / 3)))
 
-        frames.append(frame)
+        # frames.append(frame)
 
-        # cv2.imshow("Frame", frame)
+        # Cortar: ancho completo, solo la altura especificada
+        frame_cortado = crop_image_by_percentage(frame)
+        img_hsv = cv2.cvtColor(frame_cortado, cv2.COLOR_BGR2HSV)
 
-        # cv2.imwrite(str(video_frames_path / f"frame_{frame_number}.jpg"), frame)
+        masked_bgr = filter_background_by_hue(frame_cortado)
 
-        # frame_number += 1
+        img_gray = cv2.cvtColor(masked_bgr, cv2.COLOR_BGR2GRAY)
+        _, img_thresh = cv2.threshold(
+            img_gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
+        )
+
+        num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
+            img_thresh, connectivity=8
+        )
+
+        frames_with_five_objects = filter_components_by_area(img_thresh)
+
+        if len(frames_with_five_objects) == 5:
+            # 1. Calcular el offset del recorte (basado en los defaults de tu función crop_image_by_percentage)
+            # x_start_pct=10, y_start_pct=0
+            h_orig, w_orig = frame.shape[:2]
+            offset_x = int(w_orig * 10 / 100)
+            offset_y = int(h_orig * 0 / 100)
+
+            # 2. Iterar sobre los objetos detectados
+            for label_id, (x, y, w, h) in frames_with_five_objects.items():
+                # Ajustar coordenadas al frame original sumando el offset
+                abs_x = x + offset_x
+                abs_y = y + offset_y
+
+                # Dibujar rectángulo en el 'frame' original
+                cv2.rectangle(
+                    frame, (abs_x, abs_y), (abs_x + w, abs_y + h), (0, 255, 0), 1
+                )
+                # Escribir el ID encima del rectángulo
+                cv2.putText(
+                    frame,
+                    f"ID:{label_id}",
+                    (abs_x, abs_y - 5),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    (0, 255, 0),
+                    1,
+                )
+                
+        cv2.imshow("Detecciones en Video", frame)
+
+        frame_number += 1
         if cv2.waitKey(25) & 0xFF == ord("q"):
             break
     else:
-        break
+        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
 cap.release()
 cv2.destroyAllWindows()
-
-
-frame_70 = frames[69]  # Usar frame 85 para análisis incorrecto
-
-# Cortar: ancho completo, solo la altura especificada
-frame_cortado = crop_image_by_percentage(frame_70)
-img_hsv = cv2.cvtColor(frame_cortado, cv2.COLOR_BGR2HSV)
-
-masked_bgr = filter_background_by_hue(frame_cortado, show_plot=True)
-
-img_gray = cv2.cvtColor(masked_bgr, cv2.COLOR_BGR2GRAY)
-_, img_thresh = cv2.threshold(img_gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-
-num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
-    img_thresh, connectivity=8
-)
-
-frames_with_five_objects = filter_components_by_area(img_thresh)
-show_bounding_boxes(img_thresh, frames_with_five_objects)
