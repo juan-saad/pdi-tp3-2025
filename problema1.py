@@ -64,9 +64,6 @@ def filter_components_by_area(img, min_area=400, max_area=500):
             h = stats[i, cv2.CC_STAT_HEIGHT]
             frames_with_five_objects[i] = (x, y, w, h)
 
-    print(
-        f"Componentes con area entre {min_area} y {max_area}: {len(frames_with_five_objects)}"
-    )
     return frames_with_five_objects
 
 
@@ -109,7 +106,6 @@ frames_path = BASE_DIR / "frames"
 
 tirada = tiradas[0]
 
-# Crear carpeta para este video (sin extensión)
 video_frames_path = frames_path / tirada.stem
 video_frames_path.mkdir(parents=True, exist_ok=True)
 
@@ -147,23 +143,52 @@ while cap.isOpened():
         )
 
         frames_with_five_objects = filter_components_by_area(img_thresh)
+        crops = []
 
         if len(frames_with_five_objects) == 5:
-            # 1. Calcular el offset del recorte (basado en los defaults de tu función crop_image_by_percentage)
-            # x_start_pct=10, y_start_pct=0
             h_orig, w_orig = frame.shape[:2]
             offset_x = int(w_orig * 10 / 100)
             offset_y = int(h_orig * 0 / 100)
 
-            # 2. Iterar sobre los objetos detectados
             for label_id, (x, y, w, h) in frames_with_five_objects.items():
                 # Ajustar coordenadas al frame original sumando el offset
                 abs_x = x + offset_x
                 abs_y = y + offset_y
 
+                cropped_img = frame[abs_y : abs_y + h, abs_x : abs_x + w]
+
+                img_gray_crop = cv2.cvtColor(cropped_img, cv2.COLOR_BGR2GRAY)
+
+                _, img_thresh_crop = cv2.threshold(
+                    img_gray_crop, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
+                )
+
+                num_labels_crop, labels_crop, stats_crop, centroids_crop = (
+                    cv2.connectedComponentsWithStats(img_thresh_crop, connectivity=8)
+                )
+
+                img_crop_bgr = cv2.cvtColor(img_thresh_crop, cv2.COLOR_GRAY2BGR)
+
+                counter = 0
+
+                # Dibujar bounding boxes de los componentes internos del crop
+                for i in range(1, num_labels_crop):
+                    x_c = stats_crop[i, cv2.CC_STAT_LEFT]
+                    y_c = stats_crop[i, cv2.CC_STAT_TOP]
+                    w_c = stats_crop[i, cv2.CC_STAT_WIDTH]
+                    h_c = stats_crop[i, cv2.CC_STAT_HEIGHT]
+                    a_c = stats_crop[i, cv2.CC_STAT_AREA]
+
+                    if 10 <= a_c <= 20:
+                        counter += 1
+
+                frames_with_five_objects[label_id] = (x, y, w, h, counter)
+
+                crops.append(img_crop_bgr)
+
                 # Dibujar rectángulo en el 'frame' original
                 cv2.rectangle(
-                    frame, (abs_x, abs_y), (abs_x + w, abs_y + h), (0, 255, 0), 1
+                    frame, (abs_x, abs_y), (abs_x + w, abs_y + h), (0, 0, 255), 1
                 )
                 # Escribir el ID encima del rectángulo
                 cv2.putText(
@@ -172,10 +197,20 @@ while cap.isOpened():
                     (abs_x, abs_y - 5),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.5,
-                    (0, 255, 0),
+                    (0, 0, 255),
                     1,
                 )
-                
+
+                cv2.putText(
+                    frame,
+                    f"C:{counter}",
+                    (abs_x, abs_y + h + 15),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    (0, 0, 255),
+                    1,
+                )
+
         cv2.imshow("Detecciones en Video", frame)
 
         frame_number += 1
