@@ -1,11 +1,12 @@
-import cv2
+from collections import deque
 from pathlib import Path
-import numpy as np
+import cv2
 import matplotlib.pyplot as plt
+import numpy as np
 
 
 def crop_image_by_percentage(
-    image, y_start_pct=0, y_end_pct=70, x_start_pct=10, x_end_pct=97
+    image, y_start_pct=0, y_end_pct=70, x_start_pct=5, x_end_pct=97
 ):
     height, width = image.shape[:2]
 
@@ -48,7 +49,7 @@ def filter_background_by_hue(image, h_min=30, h_max=90, show_plot=False):
     return filtered_image
 
 
-def filter_components_by_area(img, min_area=400, max_area=500):
+def filter_components_by_area(img, min_area=400, max_area=600):
     num_labels, _, stats, _ = cv2.connectedComponentsWithStats(img, connectivity=8)
 
     frames_with_five_objects = {}
@@ -62,162 +63,213 @@ def filter_components_by_area(img, min_area=400, max_area=500):
             y = stats[i, cv2.CC_STAT_TOP]
             w = stats[i, cv2.CC_STAT_WIDTH]
             h = stats[i, cv2.CC_STAT_HEIGHT]
-            frames_with_five_objects[i] = (x, y, w, h)
+            frames_with_five_objects[i] = (x, y, w, h, area_componente)
 
     return frames_with_five_objects
 
 
-def show_bounding_boxes(img, stats, color=(0, 255, 0)):
-    img_bboxes = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+def check_stability(history, area_tolerance=10, required_frames=3):
+    """
+    Verifica si los dados se han detenido comparando N frames consecutivos.
+    Condiciones:
+    1. 5 dados detectados en los N frames.
+    2. Mismos pips en cada dado (ordenados por posición X).
+    3. Área similar (con un margen de tolerancia) en toda la ventana.
+    """
+    if len(history) != required_frames:
+        return False
 
-    for i in range(len(stats.keys())):
-        x, y, w, h = stats[i + 1]
-        cv2.rectangle(img_bboxes, (x, y), (x + w, y + h), color, 1)
+    if any(len(frame_dice) != 5 for frame_dice in history):
+        return False
 
-    plt.figure(figsize=(10, 8))
-    plt.imshow(cv2.cvtColor(img_bboxes, cv2.COLOR_BGR2RGB))
-    plt.title("Bounding Boxes de Componentes Conectados")
-    plt.axis("off")
-    plt.show(block=False)
+    ordered = [sorted(frame_dice, key=lambda d: d["x"]) for frame_dice in history]
+
+    for i in range(5):
+        pips_series = [ordered[t][i]["pips"] for t in range(required_frames)]
+        if len(set(pips_series)) <= 0:
+            return False
+
+        area_series = [ordered[t][i]["area"] for t in range(required_frames)]
+        if max(area_series) - min(area_series) > area_tolerance:
+            return False
+
+    return True
+
+
+def process_frame(frame):
+    """Procesa un frame y devuelve (frame_resized, detecciones_de_dados)."""
+    frame_cortado = crop_image_by_percentage(frame)
+    masked_bgr = filter_background_by_hue(frame_cortado)
+
+    img_gray = cv2.cvtColor(masked_bgr, cv2.COLOR_BGR2GRAY)
+    _, img_thresh = cv2.threshold(img_gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+    frames_with_five_objects = filter_components_by_area(img_thresh)
+    current_frame_dice = []
+
+    if len(frames_with_five_objects) != 5:
+        return current_frame_dice
+
+    h_orig, w_orig = frame.shape[:2]
+    offset_x = int(w_orig * 5 / 100)
+    offset_y = int(h_orig * 0 / 100)
+
+    for label_id, (x, y, w, h, area) in frames_with_five_objects.items():
+        abs_x = x + offset_x
+        abs_y = y + offset_y
+
+        cropped_img = frame[abs_y : abs_y + h, abs_x : abs_x + w]
+        img_hsv_crop = cv2.cvtColor(cropped_img, cv2.COLOR_BGR2HSV)
+        lower_white = np.array([0, 0, 180])
+        upper_white = np.array([180, 60, 255])
+
+        # Generamos una mascara binaria para los colores dentro del rango definido
+        img_thresh_crop = cv2.inRange(img_hsv_crop, lower_white, upper_white)
+
+        num_labels_crop, _, stats_crop, _ = cv2.connectedComponentsWithStats(
+            img_thresh_crop, connectivity=8
+        )
+
+        pips = 0
+        for i in range(1, num_labels_crop):
+            area_comp = stats_crop[i, cv2.CC_STAT_AREA]
+            if 3 <= area_comp <= 22:
+                pips += 1
+
+        current_frame_dice.append(
+            {
+                "label_id": label_id,
+                "x": abs_x,
+                "y": abs_y,
+                "w": w,
+                "h": h,
+                "area": area,
+                "pips": pips,
+            }
+        )
+
+    return current_frame_dice
+
+
+def draw_detections(img, dice):
+    """Dibuja boxes y etiqueta (D# y pips) sobre una copia de img."""
+    display = img.copy()
+    for idx, d in enumerate(sorted(dice, key=lambda k: k["x"]), start=1):
+        x, y, w, h = d["x"], d["y"], d["w"], d["h"]
+        cv2.rectangle(display, (x, y), (x + w, y + h), (0, 0, 255), 1)
+        cv2.putText(
+            display,
+            f"D{idx}",
+            (x, y - 5),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (0, 0, 255),
+            1,
+        )
+        cv2.putText(
+            display,
+            f"C:{d['pips']}",
+            (x, y + h + 15),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (0, 0, 255),
+            1,
+        )
+    return display
 
 
 def main():
     try:
-        BASE_DIR = Path(__file__).parent
+        base_dir = Path(__file__).parent
     except NameError:
-        BASE_DIR = Path.cwd()
+        base_dir = Path.cwd()
 
-    videos_path = BASE_DIR / "videos"
+    videos_path = base_dir / "videos"
     tiradas = sorted(p for p in videos_path.glob("tirada_*.mp4"))
+    if not tiradas:
+        raise FileNotFoundError(f"No se encontraron videos en: {videos_path}")
+
+    tirada = tiradas[0]
+    cap = cv2.VideoCapture(str(tirada))
+    if not cap.isOpened():
+        raise RuntimeError(f"No se pudo abrir el video: {tirada}")
+
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fps = int(cap.get(cv2.CAP_PROP_FPS))
+
+    stable_frames = 3
+    window = deque(maxlen=stable_frames)
+    frame_number = 0
+
+    try:
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            frame = cv2.resize(frame, dsize=(int(width / 3), int(height / 3)))
+            current_frame_dice = process_frame(frame)
+
+            window.append(
+                {
+                    "frame": frame.copy(),
+                    "dice": current_frame_dice,
+                    "frame_number": frame_number,
+                }
+            )
+
+            # Mostrar el frame del medio cuando haya 3
+            if len(window) < stable_frames:
+                display = window[-1]["frame"]
+                cv2.imshow("Detecciones en Video", display)
+                frame_number += 1
+                if cv2.waitKey(25) & 0xFF == ord("q"):
+                    frame_number = 0
+                    break
+                continue
+
+            prev_item, mid_item, next_item = window[0], window[1], window[2]
+            stable_center = check_stability(
+                [prev_item["dice"], mid_item["dice"], next_item["dice"]],
+                area_tolerance=10,
+                required_frames=stable_frames,
+            )
+
+            display = mid_item["frame"].copy()
+
+            if stable_center and len(mid_item["dice"]) == 5:
+                display = draw_detections(display, mid_item["dice"])
+
+                print(
+                    f"!!! DADOS DETENIDOS DETECTADOS EN FRAME {mid_item['frame_number']} !!!"
+                )
+
+                print(
+                    "Frames en la ventana (prev, mid, next):",
+                    [item["frame_number"] for item in window],
+                )
+
+                # Mostrar el frame con boxes antes de pausar
+                cv2.imshow("Detecciones en Video", display)
+                key = cv2.waitKey(0) & 0xFF
+                if key == ord("q"):
+                    frame_number = 0
+                    break
+
+                frame_number += 1
+                continue
+
+            cv2.imshow("Detecciones en Video", display)
+
+            frame_number += 1
+            if cv2.waitKey(25) & 0xFF == ord("q"):
+                frame_number = 0
+                break
+    finally:
+        cap.release()
+        cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":
     main()
-
-
-try:
-    BASE_DIR = Path(__file__).parent
-except NameError:
-    BASE_DIR = Path.cwd()
-
-videos_path = BASE_DIR / "videos"
-tiradas = sorted(p for p in videos_path.glob("tirada_*.mp4"))
-frames_path = BASE_DIR / "frames"
-
-tirada = tiradas[0]
-
-video_frames_path = frames_path / tirada.stem
-video_frames_path.mkdir(parents=True, exist_ok=True)
-
-cap = cv2.VideoCapture(str(tirada))
-width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-fps = int(cap.get(cv2.CAP_PROP_FPS))
-
-
-frame_number = 0
-frames = []
-while cap.isOpened():
-
-    ret, frame = cap.read()
-
-    if ret == True:
-
-        frame = cv2.resize(frame, dsize=(int(width / 3), int(height / 3)))
-
-        # frames.append(frame)
-
-        # Cortar: ancho completo, solo la altura especificada
-        frame_cortado = crop_image_by_percentage(frame)
-        img_hsv = cv2.cvtColor(frame_cortado, cv2.COLOR_BGR2HSV)
-
-        masked_bgr = filter_background_by_hue(frame_cortado)
-
-        img_gray = cv2.cvtColor(masked_bgr, cv2.COLOR_BGR2GRAY)
-        _, img_thresh = cv2.threshold(
-            img_gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
-        )
-
-        num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
-            img_thresh, connectivity=8
-        )
-
-        frames_with_five_objects = filter_components_by_area(img_thresh)
-        crops = []
-
-        if len(frames_with_five_objects) == 5:
-            h_orig, w_orig = frame.shape[:2]
-            offset_x = int(w_orig * 10 / 100)
-            offset_y = int(h_orig * 0 / 100)
-
-            for label_id, (x, y, w, h) in frames_with_five_objects.items():
-                # Ajustar coordenadas al frame original sumando el offset
-                abs_x = x + offset_x
-                abs_y = y + offset_y
-
-                cropped_img = frame[abs_y : abs_y + h, abs_x : abs_x + w]
-
-                img_gray_crop = cv2.cvtColor(cropped_img, cv2.COLOR_BGR2GRAY)
-
-                _, img_thresh_crop = cv2.threshold(
-                    img_gray_crop, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
-                )
-
-                num_labels_crop, labels_crop, stats_crop, centroids_crop = (
-                    cv2.connectedComponentsWithStats(img_thresh_crop, connectivity=8)
-                )
-
-                img_crop_bgr = cv2.cvtColor(img_thresh_crop, cv2.COLOR_GRAY2BGR)
-
-                counter = 0
-
-                # Dibujar bounding boxes de los componentes internos del crop
-                for i in range(1, num_labels_crop):
-                    x_c = stats_crop[i, cv2.CC_STAT_LEFT]
-                    y_c = stats_crop[i, cv2.CC_STAT_TOP]
-                    w_c = stats_crop[i, cv2.CC_STAT_WIDTH]
-                    h_c = stats_crop[i, cv2.CC_STAT_HEIGHT]
-                    a_c = stats_crop[i, cv2.CC_STAT_AREA]
-
-                    if 10 <= a_c <= 20:
-                        counter += 1
-
-                frames_with_five_objects[label_id] = (x, y, w, h, counter)
-
-                crops.append(img_crop_bgr)
-
-                # Dibujar rectángulo en el 'frame' original
-                cv2.rectangle(
-                    frame, (abs_x, abs_y), (abs_x + w, abs_y + h), (0, 0, 255), 1
-                )
-                # Escribir el ID encima del rectángulo
-                cv2.putText(
-                    frame,
-                    f"ID:{label_id}",
-                    (abs_x, abs_y - 5),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.5,
-                    (0, 0, 255),
-                    1,
-                )
-
-                cv2.putText(
-                    frame,
-                    f"C:{counter}",
-                    (abs_x, abs_y + h + 15),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.5,
-                    (0, 0, 255),
-                    1,
-                )
-
-        cv2.imshow("Detecciones en Video", frame)
-
-        frame_number += 1
-        if cv2.waitKey(25) & 0xFF == ord("q"):
-            break
-    else:
-        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-
-cap.release()
-cv2.destroyAllWindows()
