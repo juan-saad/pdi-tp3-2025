@@ -104,15 +104,18 @@ def filter_background_by_hue(image, h_min=30, h_max=90, show_plot=False):
     return filtered_image
 
 
-def filter_components_by_area(img, min_area=400, max_area=600):
+def filter_components_by_area(img, min_area=400, max_area=600, draw_boxes=False, image_for_boxes=None):
     num_labels, _, stats, _ = cv2.connectedComponentsWithStats(img, connectivity=8)
 
     frames_with_five_objects = {}
 
+    if draw_boxes and image_for_boxes is not None:
+        img_boxes = image_for_boxes.copy()
+    else:
+        img_boxes = None
+
     for i in range(1, num_labels):
         area_componente = stats[i, cv2.CC_STAT_AREA]
-
-        print(f"Componente {i}: area={area_componente}")
 
         if min_area <= area_componente <= max_area:
             # Obtener coordenadas del bounding box
@@ -122,25 +125,81 @@ def filter_components_by_area(img, min_area=400, max_area=600):
             h = stats[i, cv2.CC_STAT_HEIGHT]
             frames_with_five_objects[i] = (x, y, w, h, area_componente)
 
+            if draw_boxes and img_boxes is not None:
+                cv2.rectangle(img_boxes, (x, y), (x + w, y + h), (0, 255, 0), 2)
+
+    if draw_boxes and img_boxes is not None:
+        plt.figure(figsize=(8, 8))
+        plt.imshow(cv2.cvtColor(img_boxes, cv2.COLOR_BGR2RGB))
+        plt.title("Bounding boxes de componentes detectados")
+        plt.axis("off")
+        plt.show()
+
     return frames_with_five_objects
 
 
 frame = frames[frame_nbr]
 
+frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+plt.figure(figsize=(10, 4))
+
+# Mostrar imagen en escala de grises
+plt.subplot(1, 2, 1)
+plt.imshow(frame_gray, cmap='gray')
+plt.title('Frame en escala de grises')
+plt.axis('off')
+
+# Mostrar histograma de intensidades
+plt.subplot(1, 2, 2)
+plt.hist(frame_gray.ravel(), bins=256, range=(0, 256), color='black')
+plt.title('Histograma de intensidades')
+plt.xlabel('Intensidad')
+plt.ylabel('Cantidad de píxeles')
+
+plt.tight_layout()
+plt.show()
+
+kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
+img_top_hat = cv2.morphologyEx(frame_gray, cv2.MORPH_TOPHAT, kernel)
+
+_, img_thresh = cv2.threshold(img_top_hat, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+num_labels_hat, labels_hat, stats_hat, _ = cv2.connectedComponentsWithStats(
+    img_top_hat, connectivity=8
+)
+
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4), sharex=True, sharey=True)
+
+ax1.imshow(img_top_hat, cmap='gray')
+ax1.set_title('Imagen Top Hat')
+ax1.axis('off')
+
+ax2.imshow(img_thresh, cmap='gray')
+ax2.set_title('Imagen Umbralizada')
+ax2.axis('off')
+
+plt.tight_layout()
+plt.show()
+
 frame_cortado = crop_image_by_percentage(frame)
-masked_bgr = filter_background_by_hue(frame_cortado, show_plot=False)
+masked_bgr = filter_background_by_hue(frame_cortado, show_plot=True)
 
 img_gray = cv2.cvtColor(masked_bgr, cv2.COLOR_BGR2GRAY)
 
 _, img_thresh = cv2.threshold(img_gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
-frames_with_five_objects = filter_components_by_area(img_thresh)
+frames_with_five_objects = filter_components_by_area(img_thresh, draw_boxes=True, image_for_boxes=frame_cortado)
 
 h_orig, w_orig = frame.shape[:2]
 offset_x = int(w_orig * 5 / 100)
 offset_y = int(h_orig * 0 / 100)
 
 dice_vis = []
+dice_titles = []
+
+dice_crops = []
+dice_masks = []
 dice_titles = []
 
 for label_id, (x, y, w, h, area) in frames_with_five_objects.items():
@@ -154,6 +213,10 @@ for label_id, (x, y, w, h, area) in frames_with_five_objects.items():
 
     # Generamos una maskara binaria para los colores dentro del rango definido
     img_thresh_crop = cv2.inRange(img_hsv_crop, lower_white, upper_white)
+    
+    dice_crops.append(cv2.cvtColor(cropped_img, cv2.COLOR_BGR2RGB))
+    dice_masks.append(img_thresh_crop)
+    dice_titles.append(f"Dado {label_id}")
 
     num_labels_crop, labels_crop, stats_crop, _ = cv2.connectedComponentsWithStats(
         img_thresh_crop, connectivity=8
@@ -180,6 +243,19 @@ for label_id, (x, y, w, h, area) in frames_with_five_objects.items():
     dice_vis.append(crop_vis)
     dice_titles.append(f"Dado {label_id} | pips={pips}")
 
+n = len(dice_crops)
+fig, axes = plt.subplots(2, n, figsize=(4 * n, 8))
+
+for i in range(n):
+    axes[0, i].imshow(dice_crops[i])
+    axes[0, i].set_title(dice_titles[i])
+    axes[0, i].axis('off')
+    axes[1, i].imshow(dice_masks[i], cmap='gray')
+    axes[1, i].set_title('Máscara pips')
+    axes[1, i].axis('off')
+
+plt.tight_layout()
+plt.show(block=False)
 
 if len(dice_vis) > 0:
     n = len(dice_vis)
