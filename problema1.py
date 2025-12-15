@@ -178,6 +178,29 @@ def draw_detections(img, dice):
     return display
 
 
+def completar_frames_estables(frames_estables):
+    """
+    Rellena frames_estables con copias del primer elemento para los frame_number faltantes
+    entre el mínimo y el máximo, usando slicing.
+    """
+    frame_minimo = frames_estables[0]["frame_number"]
+    frame_maximo = frames_estables[-1]["frame_number"]
+
+    frames_dict = {f["frame_number"]: f for f in frames_estables}
+    primer_elemento = frames_estables[0].copy()
+
+    frames_estables_completo = []
+    for fn in range(frame_minimo, frame_maximo + 1):
+        if fn in frames_dict:
+            frames_estables_completo.append(frames_dict[fn])
+        else:
+            nuevo = primer_elemento.copy()
+            nuevo["frame_number"] = fn
+            frames_estables_completo.append(nuevo)
+
+    return sorted(frames_estables_completo, key=lambda f: f["frame_number"])
+
+
 def main():
     try:
         base_dir = Path(__file__).parent
@@ -238,8 +261,6 @@ def main():
 
                 frame_number += 1
         finally:
-            print(f"Total de frames estables detectados: {len(frames_estables)}")
-            print(f"Frames estables: {[f['frame_number'] for f in frames_estables]}")
             cap.release()
             cv2.destroyAllWindows()
 
@@ -253,44 +274,61 @@ def main():
         frame_minimo = frames_estables[0]["frame_number"]
         frame_maximo = frames_estables[-1]["frame_number"]
 
-        frame_number_final = 0
+        frames_estables = completar_frames_estables(frames_estables)
 
-        while cap_final.isOpened():
-            ret, frame = cap_final.read()
-            if not ret:
-                cap_final.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                frame_number_final = 0
-                continue
+        # Grabar video de salida con dados detectados
+        output_path = tirada.parent / f"{tirada.stem}_output.mp4"
+        out = cv2.VideoWriter(
+            str(output_path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height)
+        )
 
-            frame = cv2.resize(frame, dsize=(int(width / 3), int(height / 3)))
-            
-            if frame_minimo <= frame_number_final <= frame_maximo:
-                display = draw_detections(frame, frames_estables[0]["dice"])
+        try:
+            frame_number_final = 0
 
-                print(f"DADOS DETENIDOS DETECTADOS EN FRAME {frame_minimo}")
+            while cap_final.isOpened():
+                ret, frame = cap_final.read()
+                if not ret:
+                    break
 
-                # Mostrar tabla de pips por dado
-                dice_sorted = sorted(frames_estables[0]["dice"], key=lambda d: d["x"])
-                header = f"| Frame | {' | '.join([f'Dado {i+1}' for i in range(len(dice_sorted))])} |"
-                sep = f"|{'-------|' * (len(dice_sorted) + 1)}"
-                row = f"| {frames_estables[0]['frame_number']:5} | {' | '.join([f'{d['pips']:5}' for d in dice_sorted])} |"
+                frame = cv2.resize(frame, dsize=(int(width / 3), int(height / 3)))
 
-                print(header)
-                print(sep)
-                print(row)
-            else:
-                display = frame
-                
-            cv2.imshow("Video", display)
+                if frame_minimo <= frame_number_final <= frame_maximo:
+                    display = draw_detections(frame, frames_estables[0]["dice"])
+                else:
+                    display = frame
 
-            frame_number_final += 1
+                # Escribir frame en video de salida
+                display_out = cv2.resize(display, dsize=(width, height))
+                out.write(display_out)
 
-            # Sale solo si se presiona 'q'
-            if cv2.waitKey(25) & 0xFF == ord("q"):
-                break
-            
-        cap_final.release()
-        cv2.destroyAllWindows()
+                # Mostrar frame
+                cv2.imshow("Video", display)
+
+                frame_number_final += 1
+
+                # Sale solo si se presiona 'q'
+                if cv2.waitKey(25) & 0xFF == ord("q"):
+                    break
+        finally:
+            print(f"Frames estables: {[f['frame_number'] for f in frames_estables]}\n")
+
+            print(f"DADOS DETENIDOS DETECTADOS EN FRAME {frame_minimo}\n")
+
+            # Mostrar tabla de pips por dado
+            dice_sorted = sorted(frames_estables[0]["dice"], key=lambda d: d["x"])
+            header = (
+                f"| {' | '.join([f'Dado {i+1}' for i in range(len(dice_sorted))])} |"
+            )
+            sep = f"| {'-------|' * (len(dice_sorted))}"
+            row = f"| {' | '.join([f'{d['pips']:5}' for d in dice_sorted])} |"
+
+            print(header)
+            print(sep)
+            print(row)
+
+            cap_final.release()
+            out.release()
+            cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":
