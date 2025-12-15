@@ -276,8 +276,11 @@ def main():
 
         frames_estables = completar_frames_estables(frames_estables)
 
-        # Grabar video de salida con dados detectados
-        output_path = tirada.parent / f"{tirada.stem}_output.mp4"
+        # Grabar video de salida con dados detectados en subdirectorio 'output'
+        output_dir = tirada.parent / "output"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = output_dir / f"{tirada.stem}_output.mp4"
+        
         out = cv2.VideoWriter(
             str(output_path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height)
         )
